@@ -19,7 +19,6 @@ import (
 	"github.com/aler9/gortsplib/v2/pkg/media"
 	lksdk "github.com/livekit/server-sdk-go"
 	"github.com/livekit/server-sdk-go/pkg/samplebuilder"
-	"github.com/pion/rtp"
 	"github.com/pion/rtp/codecs"
 	"github.com/pion/webrtc/v3"
 	"google.golang.org/protobuf/proto"
@@ -28,7 +27,7 @@ import (
 	"github.com/treyhaknson/skyegress/pkg/util"
 )
 
-// TODO(trey): need to check if pointers a nil throughout to avoid crashing on a bad dereference
+// TODO(trey): need to check if pointers are nil throughout to avoid crashing on a bad dereference
 
 const (
 	maxVideoLate = 500 // ~1s
@@ -51,11 +50,9 @@ func NewSkyEgressServer(cmn *Common) skyEgressServer {
 }
 
 type skyEgressStream struct {
-	session         *skyegresspb.Session
-	room            *lksdk.Room
-	rtspClientMedia *media.Media
-	rtspClient      *gortsplib.Client
-	rtspStream      *gortsplib.ServerStream
+	session    *skyegresspb.Session
+	room       *lksdk.Room
+	rtspStream *gortsplib.ServerStream
 }
 
 func sessionID(roomName string, trackName string) string {
@@ -117,14 +114,27 @@ func (sc *ServeCmd) Run(cmn *Common) error {
 		session.TrackName = req.TrackName
 		session.EgressIdentity = fmt.Sprintf("skyegress-%s-%s", req.RoomName, req.TrackName)
 
-		fmt.Println("Adding session")
-		skyEgress.streamsLock.Lock()
-		skyEgress.streams[sid] = &skyEgressStream{session: session}
-		skyEgress.streamsLock.Unlock()
+		fmt.Println("Joining LiveKit room")
+		room, err := lksdk.ConnectToRoom(fmt.Sprintf("wss://%s", skyEgress.Host), lksdk.ConnectInfo{
+			APIKey:              skyEgress.ApiKey,
+			APISecret:           skyEgress.ApiSecret,
+			RoomName:            session.RoomName,
+			ParticipantIdentity: session.EgressIdentity,
+		}, &lksdk.RoomCallback{
+			ParticipantCallback: lksdk.ParticipantCallback{
+				OnTrackSubscribed: skyEgress.onTrackSubscribed,
+			},
+		})
 
-		// NOTE: doing this separately to ensure the stream and session are availble within the
-		// OnAnnounce handler
-		fmt.Println("Creating RTSP client")
+		if err != nil {
+			// TODO: cleanup if we fail to join
+			fmt.Println("Failed to join LiveKit room", err)
+			res.Result = &skyegresspb.StartSessionResponse_Error{Error: err.Error()}
+			writeError(w, res)
+			return
+		}
+
+		fmt.Println("Adding session")
 		medi := &media.Media{
 			Type: media.TypeVideo,
 			Formats: []format.Format{&format.H264{
@@ -132,20 +142,14 @@ func (sc *ServeCmd) Run(cmn *Common) error {
 				PacketizationMode: 1,
 			}},
 		}
-		client := &gortsplib.Client{}
-		streamAddr := fmt.Sprintf("rtsp://localhost:8554/%s", sid)
-		err = client.StartRecording(streamAddr, media.Medias{medi})
-		if err != nil {
-			// TODO: cleanup the stream
-			res.Result = &skyegresspb.StartSessionResponse_Error{Error: err.Error()}
-			writeError(w, res)
-			return
-		}
+		stream := gortsplib.NewServerStream(media.Medias{medi})
 
-		fmt.Println("Attaching RTSP client to session")
 		skyEgress.streamsLock.Lock()
-		skyEgress.streams[sid].rtspClientMedia = medi
-		skyEgress.streams[sid].rtspClient = client
+		skyEgress.streams[sid] = &skyEgressStream{
+			session:    session,
+			rtspStream: stream,
+			room:       room,
+		}
 		skyEgress.streamsLock.Unlock()
 
 		fmt.Println("Sending response")
@@ -330,7 +334,9 @@ func (se *skyEgressServer) relay(sid string, track *webrtc.TrackRemote, sb *samp
 			// something
 			se.streamsLock.RLock()
 			stream := se.streams[sid]
-			stream.rtspClient.WritePacketRTP(stream.rtspClientMedia, p)
+			for _, medi := range stream.rtspStream.Medias() {
+				stream.rtspStream.WritePacketRTP(medi, p)
+			}
 			se.streamsLock.RUnlock()
 		}
 	}
@@ -357,71 +363,6 @@ func (se *skyEgressServer) OnDescribe(ctx *gortsplib.ServerHandlerOnDescribeCtx)
 	return &base.Response{
 		StatusCode: base.StatusOK,
 	}, stream.rtspStream, nil
-}
-
-func (se *skyEgressServer) OnAnnounce(ctx *gortsplib.ServerHandlerOnAnnounceCtx) (*base.Response, error) {
-	path := strings.TrimPrefix(ctx.Path, "/")
-	fmt.Println("announce request", path)
-
-	// TODO: kill pre-existing stream if one already exists
-	stream := gortsplib.NewServerStream(ctx.Medias)
-
-	se.streamsLock.RLock()
-	se.streams[path].rtspStream = stream
-	se.streamsLock.RUnlock()
-
-	return &base.Response{
-		StatusCode: base.StatusOK,
-	}, nil
-}
-
-func (se *skyEgressServer) OnRecord(ctx *gortsplib.ServerHandlerOnRecordCtx) (*base.Response, error) {
-	path := strings.TrimPrefix(ctx.Path, "/")
-	fmt.Println("record request", path)
-
-	se.streamsLock.RLock()
-	stream, ok := se.streams[path]
-	se.streamsLock.RUnlock()
-
-	if !ok {
-		return &base.Response{
-			StatusCode: base.StatusNotFound,
-		}, nil
-	}
-
-	fmt.Println("Joining LiveKit room")
-	wsUrl := fmt.Sprintf("wss://%s", se.Host)
-	room, err := lksdk.ConnectToRoom(wsUrl, lksdk.ConnectInfo{
-		APIKey:              se.ApiKey,
-		APISecret:           se.ApiSecret,
-		RoomName:            stream.session.RoomName,
-		ParticipantIdentity: stream.session.EgressIdentity,
-	}, &lksdk.RoomCallback{
-		ParticipantCallback: lksdk.ParticipantCallback{
-			OnTrackSubscribed: se.onTrackSubscribed,
-		},
-	})
-
-	if err != nil {
-		// TODO: cleanup session if we fail to join?
-		fmt.Println("Failed to join LiveKit room", err)
-		return &base.Response{
-			StatusCode: base.StatusInternalServerError,
-		}, err
-	}
-
-	fmt.Println("Connected to LiveKit room")
-	se.streamsLock.RLock()
-	se.streams[path].room = room
-	se.streamsLock.RUnlock()
-
-	ctx.Session.OnPacketRTPAny(func(medi *media.Media, forma format.Format, pkt *rtp.Packet) {
-		stream.rtspStream.WritePacketRTP(medi, pkt)
-	})
-
-	return &base.Response{
-		StatusCode: base.StatusOK,
-	}, nil
 }
 
 func (se *skyEgressServer) OnSetup(ctx *gortsplib.ServerHandlerOnSetupCtx) (*base.Response, *gortsplib.ServerStream, error) {
