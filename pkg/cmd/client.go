@@ -25,7 +25,7 @@ func (cs *ClientStartCmd) Run(cmn *ClientCmd) error {
 	req := &skyegresspb.StartSessionRequest{RoomName: cs.RoomName, TrackName: cs.TrackName}
 	res := &skyegresspb.StartSessionResponse{}
 	pc := util.NewProtoClient(cmn.URL)
-	err := pc.Request(util.POST, "/start", req, res)
+	err := pc.Request(util.POST, "/session/start", req, res)
 	if err != nil {
 		panic(err)
 	}
@@ -39,15 +39,14 @@ func (cs *ClientStartCmd) Run(cmn *ClientCmd) error {
 }
 
 type ClientStopCmd struct {
-	RoomName  string `kong:"help='Room name associated with the session to end'"`
-	TrackName string `kong:"help='Track name associated with the session to end'"`
+	Sid string `kong:"help='SID associated with the session to end'"`
 }
 
 func (cs *ClientStopCmd) Run(cmn *ClientCmd) error {
-	req := &skyegresspb.StopSessionRequest{RoomName: cs.RoomName, TrackName: cs.TrackName}
+	req := &skyegresspb.StopSessionRequest{Sid: cs.Sid}
 	res := &skyegresspb.StopSessionResponse{}
 	pc := util.NewProtoClient(cmn.URL)
-	err := pc.Request(util.POST, "/stop", req, res)
+	err := pc.Request(util.POST, "/session/stop", req, res)
 	if err != nil {
 		panic(err)
 	}
@@ -66,7 +65,7 @@ func (cl *ClientListCmd) Run(cmn *ClientCmd) error {
 	req := &skyegresspb.ListSessionsRequest{}
 	res := &skyegresspb.ListSessionsResponse{}
 	pc := util.NewProtoClient(cmn.URL)
-	err := pc.Request(util.POST, "/list", req, res)
+	err := pc.Request(util.POST, "/session/list", req, res)
 	if err != nil {
 		panic(err)
 	}

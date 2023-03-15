@@ -46,3 +46,7 @@ go run main.go client stop \
 
 - We shouldn't actually need to use the RTSP client
 - Does it make more sense to create an egress component that joins the room and feeds packets into a gortsplib client, and then still run rtsp simple server?
+
+## TODOs
+
+- need to check if pointers are nil throughout to avoid crashing on a bad dereference
