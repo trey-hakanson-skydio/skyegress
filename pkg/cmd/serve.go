@@ -51,10 +51,11 @@ func NewSkyEgressServer(cmn *Common) skyEgressServer {
 }
 
 type skyEgressStream struct {
-	session    *skyegresspb.Session
-	room       *lksdk.Room
-	rtspClient *gortsplib.Client
-	rtspStream *gortsplib.ServerStream
+	session         *skyegresspb.Session
+	room            *lksdk.Room
+	rtspClientMedia *media.Media
+	rtspClient      *gortsplib.Client
+	rtspStream      *gortsplib.ServerStream
 }
 
 func sessionID(roomName string, trackName string) string {
@@ -143,6 +144,7 @@ func (sc *ServeCmd) Run(cmn *Common) error {
 
 		fmt.Println("Attaching RTSP client to session")
 		skyEgress.streamsLock.Lock()
+		skyEgress.streams[sid].rtspClientMedia = medi
 		skyEgress.streams[sid].rtspClient = client
 		skyEgress.streamsLock.Unlock()
 
@@ -328,9 +330,7 @@ func (se *skyEgressServer) relay(sid string, track *webrtc.TrackRemote, sb *samp
 			// something
 			se.streamsLock.RLock()
 			stream := se.streams[sid]
-			for _, media := range stream.rtspStream.Medias() {
-				stream.rtspClient.WritePacketRTP(media, p)
-			}
+			stream.rtspClient.WritePacketRTP(stream.rtspClientMedia, p)
 			se.streamsLock.RUnlock()
 		}
 	}
@@ -391,7 +391,7 @@ func (se *skyEgressServer) OnRecord(ctx *gortsplib.ServerHandlerOnRecordCtx) (*b
 
 	fmt.Println("Joining LiveKit room")
 	wsUrl := fmt.Sprintf("wss://%s", se.Host)
-	_, err := lksdk.ConnectToRoom(wsUrl, lksdk.ConnectInfo{
+	room, err := lksdk.ConnectToRoom(wsUrl, lksdk.ConnectInfo{
 		APIKey:              se.ApiKey,
 		APISecret:           se.ApiSecret,
 		RoomName:            stream.session.RoomName,
@@ -411,9 +411,11 @@ func (se *skyEgressServer) OnRecord(ctx *gortsplib.ServerHandlerOnRecordCtx) (*b
 	}
 
 	fmt.Println("Connected to LiveKit room")
+	se.streamsLock.RLock()
+	se.streams[path].room = room
+	se.streamsLock.RUnlock()
 
 	ctx.Session.OnPacketRTPAny(func(medi *media.Media, forma format.Format, pkt *rtp.Packet) {
-		fmt.Printf("Received packet (%d): %+v\n", pkt.PayloadType, medi)
 		stream.rtspStream.WritePacketRTP(medi, pkt)
 	})
 
@@ -427,7 +429,10 @@ func (se *skyEgressServer) OnSetup(ctx *gortsplib.ServerHandlerOnSetupCtx) (*bas
 	fmt.Println("setup request", path)
 
 	// attempt to locate the requested stream
+	se.streamsLock.RLock()
 	stream, ok := se.streams[path]
+	se.streamsLock.RUnlock()
+
 	if !ok {
 		return &base.Response{
 			StatusCode: base.StatusNotFound,

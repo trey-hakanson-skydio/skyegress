@@ -38,6 +38,11 @@ go run main.go client stop \
   --track-name demo
 ```
 
+## Notes
+
+- If a crash occurs within gortsplib, its probably because we're trying to work with an invalid media. Be sure to use the media off the context; things are keyed by pointer references, not hash/media UUID, so it needs to be the same object
+
 ## Questions
 
+- We shouldn't actually need to use the RTSP client
 - Does it make more sense to create an egress component that joins the room and feeds packets into a gortsplib client, and then still run rtsp simple server?
