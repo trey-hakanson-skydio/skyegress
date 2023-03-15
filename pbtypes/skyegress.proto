@@ -1,0 +1,56 @@
+syntax = "proto3";
+
+package skyegress;
+
+option go_package = "github.com/treyhakanson/skyegress/pbtypes/skyegresspb";
+
+// represents an egress session
+message Session {
+  string room_name = 1;
+  string track_name = 2;
+  string egress_identity = 3;
+}
+
+// represents a list of egress sessions
+message Sessions {
+  repeated Session sessions = 1;
+}
+
+// request to start an egress session
+message StartSessionRequest {
+  string room_name = 1;
+  string track_name = 2;
+}
+
+// response to starting an egress session
+message StartSessionResponse {
+  oneof result {
+    Session session = 1;
+    string error = 2;
+  }
+}
+
+// request to list egress sessions
+message ListSessionsRequest {}
+
+// response to listing egress sessions
+message ListSessionsResponse {
+  oneof result {
+    Sessions sessions = 1;
+    string error = 2;
+  }
+}
+
+// request to stop an egress session
+message StopSessionRequest {
+  string room_name = 1;
+  string track_name = 2;
+}
+
+// response to stopping an egress session
+message StopSessionResponse {
+  oneof result {
+    Session session = 1;
+    string error = 2;
+  }
+}
