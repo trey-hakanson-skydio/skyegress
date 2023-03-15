@@ -1,6 +1,7 @@
 package stream
 
 import (
+	"context"
 	"fmt"
 	"strings"
 
@@ -20,9 +21,20 @@ const (
 )
 
 type skyEgressStream struct {
+	ctx        context.Context
+	cancel     context.CancelFunc
 	session    *skyegresspb.Session
 	room       *lksdk.Room
 	rtspStream *gortsplib.ServerStream
+}
+
+func NewSkyEgressStream(session *skyegresspb.Session) skyEgressStream {
+	ctx, cancel := context.WithCancel(context.Background())
+	return skyEgressStream{
+		ctx:     ctx,
+		cancel:  cancel,
+		session: session,
+	}
 }
 
 func (ss *skyEgressStream) RTSPStream() *gortsplib.ServerStream {
@@ -54,10 +66,15 @@ func (ss *skyEgressStream) Start(host string, info lksdk.ConnectInfo) error {
 }
 
 func (ss *skyEgressStream) Stop() error {
-	// TODO: also need to kill the relay goroutine (some sort of channel/context)
-	ss.room.Disconnect()
-	err := ss.rtspStream.Close()
-	return err
+	ss.cancel()
+	if ss.rtspStream != nil {
+		err := ss.rtspStream.Close()
+		return err
+	}
+	if ss.room != nil {
+		ss.room.Disconnect()
+	}
+	return nil
 }
 
 func (ss *skyEgressStream) onTrackSubscribed(
@@ -79,19 +96,28 @@ func (ss *skyEgressStream) onTrackSubscribed(
 func (ss *skyEgressStream) relay(track *webrtc.TrackRemote, sb *samplebuilder.SampleBuilder) {
 	fmt.Println("starting relay for stream", ss.session.Sid)
 
+relayLoop:
 	for {
-		pkt, _, err := track.ReadRTP()
-		if err != nil {
-			// TODO: should we continue instead of breaking? If we need to break, we need to let the rest
-			// of the application know, and likely attempt to re-connect
-			break
-		}
-		sb.Push(pkt)
+		select {
+		case <-ss.ctx.Done():
+			break relayLoop
+		default:
+			pkt, _, err := track.ReadRTP()
+			if err != nil {
+				// TODO: should we continue instead of breaking? If we need to break, we need to let the rest
+				// of the application know, and likely attempt to re-connect
+				fmt.Println("error reading RTP packet, exiting relay loop")
+				break relayLoop
+			}
+			sb.Push(pkt)
 
-		for _, p := range sb.PopPackets() {
-			for _, medi := range ss.rtspStream.Medias() {
-				ss.rtspStream.WritePacketRTP(medi, p)
+			for _, p := range sb.PopPackets() {
+				for _, medi := range ss.rtspStream.Medias() {
+					ss.rtspStream.WritePacketRTP(medi, p)
+				}
 			}
 		}
 	}
+
+	fmt.Println("relay finished for stream", ss.session.Sid)
 }

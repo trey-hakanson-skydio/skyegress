@@ -74,17 +74,23 @@ func (sh *sessionHandler) start(w http.ResponseWriter, r *http.Request) {
 	}
 
 	fmt.Println("Adding new stream")
-	stream := sh.manager.AddStream(session)
+	stream, err := sh.manager.AddStream(session)
+	if err != nil {
+		fmt.Println("Failed to add stream", err)
+		res.Result = &skyegresspb.StartSessionResponse_Error{Error: err.Error()}
+		writeError(w, res)
+		return
+	}
+
 	err = stream.Start(sh.cfg.LiveKitConfig.Host, lksdk.ConnectInfo{
 		APIKey:              sh.cfg.LiveKitConfig.ApiKey,
 		APISecret:           sh.cfg.LiveKitConfig.ApiSecret,
 		RoomName:            req.RoomName,
 		ParticipantIdentity: identity,
 	})
-
 	if err != nil {
-		// TODO: cleanup if we fail to join
-		fmt.Println("Failed to start stream", err)
+		fmt.Println("Failed to start stream, cleaning up", err)
+		sh.manager.RemoveStream(sid)
 		res.Result = &skyegresspb.StartSessionResponse_Error{Error: err.Error()}
 		writeError(w, res)
 		return
@@ -120,6 +126,7 @@ func (sh *sessionHandler) list(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	fmt.Println("Sending response")
 	sessions := &skyegresspb.Sessions{Sessions: sh.manager.Sessions()}
 	res.Result = &skyegresspb.ListSessionsResponse_Sessions{Sessions: sessions}
 	resb, err := proto.Marshal(res)
@@ -150,17 +157,9 @@ func (sh *sessionHandler) stop(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	fmt.Println("Removing stream", req.Sid)
-	err = sh.manager.RemoveStream(req.Sid)
-	if err != nil {
-		// TODO(trey): need to handle this better
-		fmt.Println("Failed to close RTSP client, session is in a bad state!")
-		res.Result = &skyegresspb.StopSessionResponse_Error{Error: err.Error()}
-		writeError(w, res)
-		return
-	}
+	sh.manager.RemoveStream(req.Sid)
 
-	fmt.Println("Closed connections and deleted session")
+	fmt.Println("Sending response")
 	resb, err := proto.Marshal(res)
 	if err != nil {
 		res.Result = &skyegresspb.StopSessionResponse_Error{Error: err.Error()}

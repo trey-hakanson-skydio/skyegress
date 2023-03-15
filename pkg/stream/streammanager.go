@@ -28,41 +28,43 @@ func (sm *SkyEgressStreamManager) GetStream(sid string) (*skyEgressStream, bool)
 	return stream, ok
 }
 
-func (sm *SkyEgressStreamManager) AddStream(session *skyegresspb.Session) *skyEgressStream {
+func (sm *SkyEgressStreamManager) AddStream(session *skyegresspb.Session) (*skyEgressStream, error) {
 	sm.streamsLock.Lock()
 	defer sm.streamsLock.Unlock()
 
-	// TODO: what if a stream matching this session already exists?
-	stream := &skyEgressStream{session: session}
-	sm.streams[session.Sid] = stream
-	return stream
-}
-
-func (sm *SkyEgressStreamManager) RemoveStream(sid string) error {
-	stream, ok := sm.GetStream(sid)
-	if !ok {
-		msg := fmt.Sprintf("Stream %s did not exist", sid)
-		return errors.New(msg)
+	if _, ok := sm.streams[session.Sid]; ok {
+		msg := fmt.Sprintf("stream with SID %s already exists", session.Sid)
+		return nil, errors.New(msg)
 	}
 
-	// TODO: if this fails, should we still delete the stream from map?
+	stream := NewSkyEgressStream(session)
+	sm.streams[session.Sid] = &stream
+	return &stream, nil
+}
+
+func (sm *SkyEgressStreamManager) RemoveStream(sid string) {
+	stream, ok := sm.GetStream(sid)
+	if !ok {
+		fmt.Printf("Stream %s did not exist\n", sid)
+		return
+	}
+
 	err := stream.Stop()
 	if err != nil {
-		return err
+		// TODO(trey): how can we handle this better?
+		fmt.Println("Unable to stop stream successfully; still removing session")
 	}
 
 	sm.streamsLock.Lock()
 	delete(sm.streams, sid)
 	sm.streamsLock.Unlock()
-
-	return nil
 }
 
 func (sm *SkyEgressStreamManager) Sessions() []*skyegresspb.Session {
 	sm.streamsLock.RLock()
 	defer sm.streamsLock.RUnlock()
 
-	sessions := make([]*skyegresspb.Session, len(sm.streams))
+	sessions := make([]*skyegresspb.Session, 0, len(sm.streams))
 	for _, stream := range sm.streams {
 		sessions = append(sessions, stream.session)
 	}

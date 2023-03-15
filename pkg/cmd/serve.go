@@ -14,7 +14,10 @@ import (
 	"github.com/treyhaknson/skyegress/pkg/stream"
 )
 
-type ServeCmd struct{}
+type ServeCmd struct {
+	HTTPConfig config.HTTPConfig `kong:"embed,prefix='http-'"`
+	RTSPConfig config.RTSPConfig `kong:"embed,prefix='rtsp-'"`
+}
 
 func (sc *ServeCmd) Run(cfg *config.Config) error {
 	ctx, cancelCtx := context.WithCancel(context.Background())
@@ -29,7 +32,7 @@ func (sc *ServeCmd) Run(cfg *config.Config) error {
 	hh.Mount(mux)
 
 	httpServer := &http.Server{
-		Addr:    ":8008",
+		Addr:    fmt.Sprintf(":%d", sc.HTTPConfig.Port),
 		Handler: mux,
 		BaseContext: func(l net.Listener) context.Context {
 			return ctx
@@ -37,18 +40,18 @@ func (sc *ServeCmd) Run(cfg *config.Config) error {
 	}
 
 	rtspServer := &gortsplib.Server{
-		RTSPAddress:       ":8554",
-		UDPRTPAddress:     ":8000",
-		UDPRTCPAddress:    ":8001",
-		MulticastIPRange:  "224.1.0.0/16",
-		MulticastRTPPort:  8002,
-		MulticastRTCPPort: 8003,
+		RTSPAddress:       fmt.Sprintf(":%d", sc.RTSPConfig.Port),
+		UDPRTPAddress:     fmt.Sprintf(":%d", sc.RTSPConfig.UDPRTPPort),
+		UDPRTCPAddress:    fmt.Sprintf(":%d", sc.RTSPConfig.UDPRTCPPort),
+		MulticastIPRange:  sc.RTSPConfig.MulticastIPRange,
+		MulticastRTPPort:  sc.RTSPConfig.MulticastRTPPort,
+		MulticastRTCPPort: sc.RTSPConfig.MulticastRTCPPort,
 	}
 	rtspHandler := service.NewRTSPHandler(&manager)
 	rtspHandler.Mount(rtspServer)
 
 	go func() {
-		fmt.Println("starting http server on 8008")
+		fmt.Println("starting http server on", sc.HTTPConfig.Port)
 		err := httpServer.ListenAndServe()
 		if errors.Is(err, http.ErrServerClosed) {
 			fmt.Println("http server closed")
@@ -59,7 +62,7 @@ func (sc *ServeCmd) Run(cfg *config.Config) error {
 	}()
 
 	go func() {
-		fmt.Println("starting rtsp server on 8554")
+		fmt.Println("starting rtsp server on", sc.RTSPConfig.Port)
 		err := rtspServer.StartAndWait()
 		if err != nil {
 			fmt.Printf("error listening for rtsp server: %s\n", err)
@@ -71,5 +74,3 @@ func (sc *ServeCmd) Run(cfg *config.Config) error {
 
 	return nil
 }
-
-// RTSP server handlers
